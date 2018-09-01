@@ -12,38 +12,57 @@
 
 #include <PubSubClient.h>
 
-#include <Stepper2.h>
 #include "config.h"
 #include "ctype.h"
 
 const char* ssid = WIFI_SSID;
-const char* password = WIFI_PASS;
+const char* password = WIFI_PASSWORD;
 const char* mqttServer = MQTT_SERVER;
-const char* mqttClientId = MQTT_CLIENT;
+const int mqttPort = MQTT_PORT;
+const char* mqttClientId = MQTT_CLIENT_ID;
 const char* mqttUser = MQTT_USER;
-const char* mqttPass = MQTT_PASS;
+const char* mqttPass = MQTT_PASSWORD;
 const char* mqttSubTopic = MQTT_SUB_TOPIC;
-const char* mqttPubTopic = MQTT_PUB_TOPIC;
+const char* mqttPubTopicCallback = MQTT_PUB_CALLBACK_TOPIC;
+const char* mqttPubTopicSuccess = MQTT_PUB_SUCCESS_TOPIC;
+const char* mqttPubTopicFail = MQTT_PUB_FAIL_TOPIC;
 const char* mqttPubMessage = "Yum yum yum!";
-const int rpm = 15; // max rpm on 28BYJ-48
-int pinOut[4] = { D1, D2, D5, D6 };
-long lastMsg = 0;
-char msg[50];
-int value = 0;
+const char* mqttPubMessageCallback = "OK";
+const int motor_pin = D2;
+const int button_pin = D1;
+const int ON = LOW;
+const int OFF = HIGH;
+const int target_debounce_count = 10;
+const int max_long_value = 2147483647;
+const int min_motor_revolution_duration = 1000;
+const int motor_revolution_duration = 1500;
+int button_state = OFF; // LOW means pressed
+int motor_state = OFF; // LOW means pressed
+long motor_start_time = max_long_value;
+long motor_safe_stop_time = max_long_value;
+int motor_target_revolutions_count = 0;
 
-Stepper2 myStepper(pinOut);
 WiFiClient espClient;
 PubSubClient client(espClient);
 
 void setup() {
-  Serial.begin(115200);
-  setupMqtt();
+  Serial.begin(9600);
+  setupButton();
   setupMotor();
+  setupMqtt();
   setupWifi();
 }
 
 void setupMotor() {
-  myStepper.setSpeed(rpm);
+  delay(10);
+  digitalWrite(motor_pin, motor_state);
+  pinMode(motor_pin, OUTPUT);
+}
+
+void setupButton() {
+  pinMode(button_pin, INPUT_PULLUP);
+  delay(10);
+  button_state =  digitalRead(button_pin);
 }
 
 void setupWifi() {
@@ -69,7 +88,7 @@ void setupWifi() {
 }
 
 void setupMqtt() {
-  client.setServer(mqttServer, 1883);
+  client.setServer(mqttServer, mqttPort);
   client.setCallback(callback);
 }
 
@@ -107,23 +126,75 @@ void callback(char* topic, byte* payload, unsigned int length) {
   // Perform an action
   if (isDigit((char)payload[0])) {
     int amount = payload[0] - '0';
-    turn(amount);
-    client.publish(mqttPubTopic, mqttPubMessage);
-    
-    Serial.print("Publish message: ");
-    Serial.println(mqttPubTopic);
-    Serial.print(mqttPubMessage);
-    Serial.println();
+    motor_target_revolutions_count = amount;
+    motor_safe_stop_time = millis() + ((motor_revolution_duration + 1) * amount);
+    startMotor();
+    Serial.println("\nMotor should stop no later than");
+    Serial.println(motor_safe_stop_time);
+    client.publish(mqttPubTopicCallback, mqttPubMessageCallback);
   }
 }
 
-void turn(int fullTurns) {
-  Serial.print("Turning motor to ");
-  Serial.print(fullTurns);
-  Serial.println();
-  myStepper.setDirection(0);
-  myStepper.turn(fullTurns);
-  myStepper.stop();
+void buttonLoop() {
+  int debounce_count = 0;
+  int next_button_state = digitalRead(button_pin);
+  
+  // Prevent accidental button state changes
+  while (debounce_count < target_debounce_count && next_button_state == ON && button_state == OFF) {
+    delay(1);
+    next_button_state = digitalRead(button_pin);
+    debounce_count++;
+  }
+
+  // Register a revolution
+  if (debounce_count >= target_debounce_count) {
+    motor_target_revolutions_count--;
+    client.publish(mqttPubTopicSuccess, mqttPubMessage);
+    Serial.println("\Feed detected... ");
+    Serial.println(millis());
+  }
+
+  button_state = next_button_state;
+  
+  delay(1);
+}
+
+void stopMotor() {
+  motor_state = OFF;
+  motor_target_revolutions_count = 0;
+  motor_safe_stop_time = max_long_value; // reset motor_safe_stop_time to the default value
+  digitalWrite(motor_pin, motor_state);
+  Serial.println("\nStopping motor... ");
+  Serial.println(millis());
+}
+
+void startMotor() {
+  motor_state = ON;
+  motor_start_time = millis();
+  digitalWrite(motor_pin, motor_state);
+  Serial.println("Starting motor...");
+  Serial.println(motor_start_time);
+}
+
+void motorLoop() {
+  int current_time = millis();
+  
+  if (motor_state == ON) {
+    // Turn of the motor on fail stop timer
+    if (current_time > motor_safe_stop_time) {
+      stopMotor();
+      return;
+    }
+    // We've reached target rev count 
+    if (motor_target_revolutions_count <= 0) {
+      // Prolong run if it was running for a too little time
+      if (current_time - motor_start_time < min_motor_revolution_duration) {
+        motor_target_revolutions_count++;
+        return;
+      }
+      stopMotor();
+    }
+  }
 }
 
 void loop() {
@@ -132,4 +203,6 @@ void loop() {
   }
 
   client.loop();
+  buttonLoop();
+  motorLoop();
 }

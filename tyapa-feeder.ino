@@ -35,7 +35,6 @@ const int motor_pin = D2;
 const int button_pin = D1;
 const int ON = LOW;
 const int OFF = HIGH;
-const int target_debounce_count = 10;
 const int max_long_value = 2147483647;
 const int min_motor_revolution_duration = 1000;
 const int motor_revolution_duration = 1500;
@@ -70,8 +69,10 @@ void setupAlarm() {
     Serial.print("\n");
   }
   // Set two alarms for sync time request
-  Alarm.alarmRepeat(15, 39, 0, publishTimeRequest);
-  Alarm.alarmRepeat(15, 40, 0, publishTimeRequest);
+  Alarm.alarmRepeat(23, 55, 0, publishTimeRequest);
+  Alarm.alarmRepeat(11, 55, 0, publishTimeRequest);
+  // And one to reboot after certain period of time (604800 seconds = 1 week)
+  Alarm.timerOnce(604800, espRestart);
 }
 
 void setupMotor() {
@@ -183,6 +184,11 @@ void startMotor() {
   Serial.println(motor_start_time);
 }
 
+void espRestart() {
+  delay(500);
+  ESP.restart();
+}
+
 void setTimers(byte* payload, unsigned int length) {
   static char* msgStart = "Setting timers... ";
   static char* msgSuccess = "SetTimers ok, rebooting...";
@@ -200,11 +206,9 @@ void setTimers(byte* payload, unsigned int length) {
     Serial.println(msgSuccess);
     client.publish(mqttPubTopicDebug, msgSuccess);
     // Avoid keeping connection on server
-    delay(250);
     client.disconnect();
     // The easiest way to setup timers is to reboot after timers change
-    delay(500);
-    ESP.restart();
+    espRestart();
   } else {
     Serial.print(msgFail);
     Serial.println(length);
@@ -280,11 +284,12 @@ void mqttConnectLoop() {
 }
 
 void buttonLoop() {
+  static int target_debounce_count = 10;
   int debounce_count = 0;
   int next_button_state = digitalRead(button_pin);
   
-  // Prevent accidental button state changes
-  while (debounce_count < target_debounce_count && next_button_state == ON && button_state == OFF) {
+  // Prevent accidental button state readings
+  while (debounce_count < target_debounce_count && next_button_state == OFF && button_state == ON) {
     delay(1);
     next_button_state = digitalRead(button_pin);
     debounce_count++;
@@ -299,8 +304,6 @@ void buttonLoop() {
   }
 
   button_state = next_button_state;
-  
-  delay(1);
 }
 
 void motorLoop() {
@@ -334,5 +337,5 @@ void loop() {
   buttonLoop();
   motorLoop();
 
-  Alarm.delay(1000);
+  Alarm.delay(33);
 }

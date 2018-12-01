@@ -30,14 +30,11 @@ const char* mqttSubTopicGetStatus = MQTT_SUB_TOPIC_GET_STATUS;
 const char* mqttPubTopicFeedCallback = MQTT_PUB_TOPIC_FEED_CALLBACK;
 const char* mqttPubTopicDebug = MQTT_PUB_TOPIC_DEBUG;
 const char* mqttPubTopicGetTime = MQTT_PUB_TOPIC_GET_TIME;
-const char* mqttPubMessage = "Yum yum yum!";
 const int motor_pin = D2;
 const int button_pin = D1;
 const int ON = LOW;
 const int OFF = HIGH;
 const int max_long_value = 2147483647;
-const int min_motor_revolution_duration = 1000;
-const int motor_revolution_duration = 1500;
 int button_state = OFF; // LOW means pressed
 int motor_state = OFF;  // LOW means stopped
 long motor_start_time = max_long_value;
@@ -140,21 +137,23 @@ void publishStatus() {
 }
 
 void feed(byte* payload, unsigned int length) {
+  static int max_motor_revolution_duration = 2000;
   static char* msgStart = "Starting Feed... ";
+  static char* msgSuccess = "Feed started";
   static char* msgFail = "Feed failed, incorrect payload size";
   
-  Serial.print(msgStart);
+  Serial.println(msgStart);
   
   if (length == 1) {
     int amount = (int)payload[0];
     motor_target_revolutions_count = amount;
-    motor_safe_stop_time = millis() + (motor_revolution_duration * amount);
+    motor_safe_stop_time = millis() + (max_motor_revolution_duration * amount);
     startMotor();
     Serial.print("Amount is ");
-    Serial.println(amount);
-    Serial.print("Motor should stop no later than ");
+    Serial.print(amount);
+    Serial.print(" Motor should stop no later than ");
     Serial.println(motor_safe_stop_time);
-    client.publish(mqttPubTopicDebug, "Feed ok");
+    client.publish(mqttPubTopicDebug, msgSuccess);
   } else {
     Serial.println(msgFail);
     client.publish(mqttPubTopicDebug, msgFail);
@@ -162,26 +161,26 @@ void feed(byte* payload, unsigned int length) {
 }
 
 void feedOnce() {
-  Serial.print("FeedOnce... ");
   static byte payload[] = {1};
   feed(payload, 1);
 }
 
 void stopMotor() {
+  // Reset motor state to the default values
   motor_state = OFF;
   motor_target_revolutions_count = 0;
-  motor_safe_stop_time = max_long_value; // reset motor_safe_stop_time to the default value
+  motor_safe_stop_time = max_long_value;
   digitalWrite(motor_pin, motor_state);
-  Serial.print("Stopping motor... ");
-  Serial.println(millis());
+  Serial.print(millis());
+  Serial.println(" Stopping motor... ");
 }
 
 void startMotor() {
   motor_state = ON;
   motor_start_time = millis();
   digitalWrite(motor_pin, motor_state);
-  Serial.print("Starting motor... ");
-  Serial.println(motor_start_time);
+  Serial.print(motor_start_time);
+  Serial.println(" Starting motor... ");
 }
 
 void espRestart() {
@@ -284,6 +283,7 @@ void mqttConnectLoop() {
 }
 
 void buttonLoop() {
+  static char* mqttPubMessage = "Yum yum yum!";
   static int target_debounce_count = 10;
   int debounce_count = 0;
   int next_button_state = digitalRead(button_pin);
@@ -299,8 +299,8 @@ void buttonLoop() {
   if (debounce_count >= target_debounce_count) {
     motor_target_revolutions_count--;
     client.publish(mqttPubTopicFeedCallback, mqttPubMessage);
-    Serial.println("Feed detected... ");
-    Serial.println(millis());
+    Serial.print(millis());
+    Serial.println(" Feed detected... ");
   }
 
   button_state = next_button_state;
@@ -318,11 +318,6 @@ void motorLoop() {
     
     // We've reached target rev count 
     if (motor_target_revolutions_count <= 0) {
-      // Prolong run if it was running for a too little time
-      if (current_time - motor_start_time < min_motor_revolution_duration) {
-        motor_target_revolutions_count++;
-        return;
-      }
       stopMotor();
     }
   }
@@ -337,5 +332,5 @@ void loop() {
   buttonLoop();
   motorLoop();
 
-  Alarm.delay(33);
+  Alarm.delay(25);
 }
